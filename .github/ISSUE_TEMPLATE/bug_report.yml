@@ -1,0 +1,115 @@
+name: Bug Report
+description: Report a bug in the VPN daemon
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug! Please fill out the sections below to help us investigate.
+
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Operating Mode
+      description: Which mode were you running in?
+      options:
+        - Client mode
+        - Server mode
+        - Daemon mode (REST API)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - macOS (Intel)
+        - macOS (Apple Silicon)
+        - Linux x86_64
+        - Linux arm64
+        - Windows x64
+    validations:
+      required: true
+
+  - type: input
+    id: os-version
+    attributes:
+      label: OS Version
+      placeholder: "macOS 14.2 / Ubuntu 22.04 / Windows 11"
+    validations:
+      required: true
+
+  - type: input
+    id: rust-version
+    attributes:
+      label: Rust Version (if building from source)
+      placeholder: "rustc 1.75.0"
+    validations:
+      required: false
+
+  - type: input
+    id: minnowvpn-version
+    attributes:
+      label: MinnowVPN Version
+      description: Output of `minnowvpn --version`
+      placeholder: "minnowvpn 1.1.0"
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug Description
+      description: Describe what happened
+      placeholder: Describe the bug in detail...
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      description: How can we reproduce the issue?
+      placeholder: |
+        1. Run `sudo ./minnowvpn -c config.conf`
+        2. Wait for connection...
+        3. See error
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What should have happened?
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Run with `-v` for verbose output and paste relevant logs
+      render: shell
+    validations:
+      required: false
+
+  - type: textarea
+    id: config
+    attributes:
+      label: Configuration
+      description: "Your WireGuard config (REMOVE ALL KEYS - replace with <REDACTED>!)"
+      render: ini
+      placeholder: |
+        [Interface]
+        PrivateKey = <REDACTED>
+        Address = 10.0.0.2/24
+
+        [Peer]
+        PublicKey = <REDACTED>
+        Endpoint = vpn.example.com:51820
+        AllowedIPs = 0.0.0.0/0
+    validations:
+      required: false

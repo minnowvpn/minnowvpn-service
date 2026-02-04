@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Documentation
+    url: https://github.com/minnowvpn/minnowvpn-service#readme
+    about: Check the README for CLI usage and API documentation
+  - name: Deployment Issues
+    url: https://github.com/minnowvpn/minnowvpn/issues
+    about: For Docker deployment issues, use the main minnowvpn repo

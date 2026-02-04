@@ -1,0 +1,112 @@
+name: Protocol Compatibility Issue
+description: Report WireGuard interoperability issues
+title: "[Compat]: "
+labels: ["compatibility", "protocol"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Having trouble connecting to another WireGuard implementation? This form helps us diagnose protocol compatibility issues.
+
+        **Important:** Remove ALL private keys from your config before sharing!
+
+  - type: dropdown
+    id: other-implementation
+    attributes:
+      label: Other WireGuard Implementation
+      description: What are you trying to connect to/from?
+      options:
+        - Official WireGuard (wireguard-tools)
+        - WireGuard for iOS
+        - WireGuard for Android
+        - WireGuard for Windows (official)
+        - WireGuard for macOS (official)
+        - boringtun (Cloudflare)
+        - Mullvad VPN
+        - Tailscale
+        - Other (specify in description)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: minnowvpn-role
+    attributes:
+      label: MinnowVPN Role
+      description: Is MinnowVPN acting as client or server?
+      options:
+        - Client (connecting TO the other implementation)
+        - Server (accepting connections FROM the other implementation)
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Issue Description
+      description: Describe the compatibility issue
+      placeholder: |
+        Handshake fails when connecting to...
+        Connection drops after...
+    validations:
+      required: true
+
+  - type: textarea
+    id: minnowvpn-config
+    attributes:
+      label: MinnowVPN Configuration
+      description: "Your config (REPLACE ALL KEYS with <REDACTED>!)"
+      render: ini
+      placeholder: |
+        [Interface]
+        PrivateKey = <REDACTED>
+        Address = 10.0.0.2/24
+
+        [Peer]
+        PublicKey = <REDACTED>
+        Endpoint = vpn.example.com:51820
+        AllowedIPs = 0.0.0.0/0
+    validations:
+      required: true
+
+  - type: textarea
+    id: other-config
+    attributes:
+      label: Other Implementation Configuration
+      description: "The other side's config (REPLACE ALL KEYS!)"
+      render: ini
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Handshake Logs
+      description: Run MinnowVPN with `-v` and paste the handshake-related output
+      render: shell
+    validations:
+      required: false
+
+  - type: textarea
+    id: packet-capture
+    attributes:
+      label: Packet Capture (optional)
+      description: If you've captured packets, describe what you see
+      placeholder: |
+        Seeing handshake initiation sent but no response...
+        MAC verification failing...
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: verification
+    attributes:
+      label: Verification Checklist
+      options:
+        - label: I have verified both sides have matching public keys
+          required: true
+        - label: I have verified the endpoint address/port is correct
+          required: true
+        - label: I have verified firewall allows UDP traffic on port 51820
+          required: false
+        - label: I have removed all private keys from the configs above
+          required: true
