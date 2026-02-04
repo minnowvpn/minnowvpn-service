@@ -131,11 +131,12 @@ impl DaemonService {
             status_tx: self.status_tx.clone(),
         };
 
-        // Build router with auth middleware
-        // Note: The routes already have AppState via build_router
-        // We add auth middleware using a layer
-        let app = routes::build_router(app_state)
+        // Build protected router with auth middleware
+        let protected_routes = routes::build_protected_router(app_state)
             .layer(middleware::from_fn_with_state(auth_state, auth::auth_middleware));
+
+        // Build public router (no auth) and merge with protected routes
+        let app = routes::build_public_router().merge(protected_routes);
 
         // Bind to localhost only
         let addr = SocketAddr::from(([127, 0, 0, 1], port));

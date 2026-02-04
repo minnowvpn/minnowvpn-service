@@ -54,8 +54,14 @@ impl IntoResponse for ApiError {
     }
 }
 
-/// Build the API router with all routes
-pub fn build_router(state: AppState) -> Router {
+/// Build the public API router (no auth required)
+pub fn build_public_router() -> Router {
+    Router::new()
+        .route("/api/v1/health", get(handle_health))
+}
+
+/// Build the protected API router (requires auth)
+pub fn build_protected_router(state: AppState) -> Router {
     Router::new()
         // Client mode endpoints
         .route("/api/v1/connect", post(handle_connect))
@@ -73,6 +79,14 @@ pub fn build_router(state: AppState) -> Router {
         // SSE events stream
         .route("/api/v1/events", get(handle_events_sse))
         .with_state(state)
+}
+
+/// GET /api/v1/health - Health check (no auth required)
+pub async fn handle_health() -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "status": "healthy",
+        "service": "minnowvpn-daemon"
+    }))
 }
 
 // ============================================================================
