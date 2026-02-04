@@ -6,6 +6,8 @@
 
 > ⚠️ **Alpha Software**: This project is under active development and not yet ready for production use. APIs and features may change without notice. Use at your own risk.
 
+> **Note:** This is a reference repository. Bug reports are welcome, but pull requests will not be accepted.
+
 **A WireGuard-compatible VPN daemon written in Rust.**
 
 ## Overview
