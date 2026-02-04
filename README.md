@@ -14,7 +14,11 @@
 
 Like its namesake, MinnowVPN is deliberately small and nimble. No bloat, no unnecessary features—just a fast, focused VPN that does one thing well.
 
-MinnowVPN Service is the core daemon for the MinnowVPN project, implementing the complete WireGuard protocol (Noise IKpsk2 handshake pattern). It operates in three modes:
+MinnowVPN Service is the **open source core** of the [MinnowVPN](https://github.com/minnowvpn/minnowvpn) platform. We believe the security-critical parts of a VPN should be transparent and auditable—so we've made the entire daemon available under the Apache 2.0 license. Inspect the code, verify the cryptography, or build it yourself.
+
+The full MinnowVPN platform adds a web management console, desktop clients, and enterprise features on top of this core. This repository focuses purely on the VPN daemon itself.
+
+MinnowVPN Service implements the complete WireGuard protocol (Noise IKpsk2 handshake pattern) and operates in three modes:
 
 - **Client Mode** - Connect to a WireGuard VPN server
 - **Server Mode** - Accept incoming VPN client connections
