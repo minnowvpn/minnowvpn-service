@@ -1,6 +1,6 @@
 # MinnowVPN Service
 
-[![License](https://img.shields.io/badge/License-Proprietary-red.svg)]()
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Status](https://img.shields.io/badge/Status-Alpha-orange.svg)]()
 [![Under Development](https://img.shields.io/badge/Under%20Development-⚠️-yellow.svg)]()
 
@@ -503,4 +503,4 @@ Routes are tracked in a state file for crash recovery:
 
 ## License
 
-Proprietary - All rights reserved.
+Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for details.

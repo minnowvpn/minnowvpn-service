@@ -3,7 +3,7 @@ name = "minnowvpn"
 version = "1.1.0"
 edition = "2021"
 description = "MinnowVPN - WireGuard-compatible VPN"
-license = "Proprietary"
+license = "Apache-2.0"
 
 [dependencies]
 # Cryptography - WireGuard Classic Mode
