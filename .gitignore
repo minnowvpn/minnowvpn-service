@@ -1,0 +1,18 @@
+# Rust build artifacts
+/target/
+
+# Cargo lock file (optional for binaries, but we'll keep it tracked)
+# Cargo.lock
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+
+# Debug files
+*.pdb
