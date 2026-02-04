@@ -8,17 +8,27 @@
 
 > **Note:** This is a reference repository. Bug reports are welcome, but pull requests will not be accepted.
 
-**A WireGuard-compatible VPN daemon written in Rust.**
+**Small. Fast. Lean.** A modern WireGuard VPN daemon written in Rust.
 
 ## Overview
 
-MinnowVPN Service is the core VPN daemon for the MinnowVPN project. It implements the complete WireGuard protocol (Noise IKpsk2 handshake pattern) and can operate in three modes:
+Like its namesake, MinnowVPN is deliberately small and nimble. No bloat, no unnecessary features—just a fast, focused VPN that does one thing well.
+
+MinnowVPN Service is the core daemon for the MinnowVPN project, implementing the complete WireGuard protocol (Noise IKpsk2 handshake pattern). It operates in three modes:
 
 - **Client Mode** - Connect to a WireGuard VPN server
 - **Server Mode** - Accept incoming VPN client connections
 - **Daemon Mode** - Run as a background service with REST API for GUI control
 
 The implementation is verified against Cloudflare's [boringtun](https://github.com/cloudflare/boringtun) to ensure protocol compatibility.
+
+## Why MinnowVPN?
+
+| | |
+|---|---|
+| 🐟 **Small** | ~11,000 lines of focused Rust code. Single binary, no runtime dependencies. The entire daemon fits in a few megabytes. |
+| ⚡ **Fast** | Native Rust performance with sub-second handshakes. Efficient ChaCha20-Poly1305 encryption. Minimal memory footprint. |
+| 🎯 **Lean** | Does one thing well: WireGuard VPN. No unnecessary abstractions, no feature creep. Clean, auditable codebase. |
 
 ## Features
 
