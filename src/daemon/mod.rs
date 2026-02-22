@@ -119,7 +119,8 @@ impl DaemonService {
 
         tracing::info!("Auth token written to {:?}", token_file_path);
 
-        // In debug mode, also log the token for testing (remove in production)
+        // Only log the actual token in debug builds (never in release builds)
+        #[cfg(debug_assertions)]
         tracing::debug!("Auth token (for testing): {}", token);
 
         // Create auth state

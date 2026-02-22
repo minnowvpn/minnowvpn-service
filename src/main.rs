@@ -169,7 +169,7 @@ fn determine_mode(args: &Args, config: &WireGuardConfig) -> Result<Mode, MinnowV
     }
 }
 
-/// Run the client with graceful shutdown on Ctrl+C or SIGTERM
+/// Run the client with graceful shutdown on Ctrl+C or SIGTERM/Ctrl+Break
 async fn run_with_cleanup_client(client: &mut WireGuardClient) -> Result<(), MinnowVpnError> {
     let ctrl_c = tokio::signal::ctrl_c();
 
@@ -181,7 +181,15 @@ async fn run_with_cleanup_client(client: &mut WireGuardClient) -> Result<(), Min
             .await
     };
 
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    let terminate = async {
+        tokio::signal::windows::ctrl_break()
+            .expect("Failed to install Ctrl+Break handler")
+            .recv()
+            .await
+    };
+
+    #[cfg(not(any(unix, windows)))]
     let terminate = std::future::pending::<Option<()>>();
 
     tokio::select! {
@@ -194,14 +202,17 @@ async fn run_with_cleanup_client(client: &mut WireGuardClient) -> Result<(), Min
             Ok(())
         }
         _ = terminate => {
+            #[cfg(unix)]
             tracing::info!("\nReceived SIGTERM, shutting down...");
+            #[cfg(windows)]
+            tracing::info!("\nReceived Ctrl+Break, shutting down...");
             client.cleanup().await?;
             Ok(())
         }
     }
 }
 
-/// Run the server with graceful shutdown on Ctrl+C or SIGTERM
+/// Run the server with graceful shutdown on Ctrl+C or SIGTERM/Ctrl+Break
 async fn run_with_cleanup_server(server: &mut WireGuardServer) -> Result<(), MinnowVpnError> {
     let ctrl_c = tokio::signal::ctrl_c();
 
@@ -213,7 +224,15 @@ async fn run_with_cleanup_server(server: &mut WireGuardServer) -> Result<(), Min
             .await
     };
 
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    let terminate = async {
+        tokio::signal::windows::ctrl_break()
+            .expect("Failed to install Ctrl+Break handler")
+            .recv()
+            .await
+    };
+
+    #[cfg(not(any(unix, windows)))]
     let terminate = std::future::pending::<Option<()>>();
 
     tokio::select! {
@@ -226,7 +245,10 @@ async fn run_with_cleanup_server(server: &mut WireGuardServer) -> Result<(), Min
             Ok(())
         }
         _ = terminate => {
+            #[cfg(unix)]
             tracing::info!("\nReceived SIGTERM, shutting down...");
+            #[cfg(windows)]
+            tracing::info!("\nReceived Ctrl+Break, shutting down...");
             server.cleanup().await?;
             Ok(())
         }
