@@ -719,6 +719,23 @@ pub async fn handle_start_server(
     let (peer_event_tx, mut peer_event_rx) = tokio::sync::mpsc::channel(16);
     let peers = Arc::new(Mutex::new(PeerManager::new()));
 
+    // Initialize peers from bootstrap config (if any)
+    {
+        let mut peers_guard = peers.lock().await;
+        for peer_config in &config.peers {
+            let allowed_ips: Vec<ipnet::IpNet> = peer_config
+                .allowed_ips
+                .iter()
+                .map(|net| (*net).into())
+                .collect();
+            peers_guard.add_peer(
+                peer_config.public_key,
+                peer_config.preshared_key,
+                allowed_ips,
+            );
+        }
+    }
+
     match WireGuardServer::new_with_channels(
         config.clone(),
         peers.clone(),

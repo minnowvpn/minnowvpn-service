@@ -394,52 +394,88 @@ impl DaemonService {
         request: JsonRpcRequest,
         state: &Arc<Mutex<DaemonState>>,
     ) -> JsonRpcResponse {
-        let s = state.lock().await;
+        // Extract all needed values under the state lock, then drop it
+        // before awaiting the peers lock (to avoid blocking_lock panic)
+        enum StatusKind {
+            Client(StatusResponse),
+            Server {
+                peers: Arc<Mutex<PeerManager>>,
+                listen_port: u16,
+                interface_address: String,
+                state_val: ConnectionState,
+                started_at: Option<String>,
+                bytes_sent: u64,
+                bytes_received: u64,
+                error_message: Option<String>,
+            },
+            Disconnected(StatusResponse),
+        }
 
-        match &s.mode {
-            Some(VpnMode::Client { vpn_ip, server_endpoint, .. }) => {
-                let status = StatusResponse {
-                    state: s.connection_state,
-                    vpn_ip: Some(vpn_ip.clone()),
-                    server_endpoint: Some(server_endpoint.clone()),
-                    connected_at: s.started_at.clone(),
-                    bytes_sent: s.traffic_stats.get_sent(),
-                    bytes_received: s.traffic_stats.get_received(),
-                    last_handshake: None,
-                    error_message: s.error_message.clone(),
-                };
+        let kind = {
+            let s = state.lock().await;
+            match &s.mode {
+                Some(VpnMode::Client { vpn_ip, server_endpoint, .. }) => {
+                    StatusKind::Client(StatusResponse {
+                        state: s.connection_state,
+                        vpn_ip: Some(vpn_ip.clone()),
+                        server_endpoint: Some(server_endpoint.clone()),
+                        connected_at: s.started_at.clone(),
+                        bytes_sent: s.traffic_stats.get_sent(),
+                        bytes_received: s.traffic_stats.get_received(),
+                        last_handshake: None,
+                        error_message: s.error_message.clone(),
+                    })
+                }
+                Some(VpnMode::Server { listen_port, interface_address, peers, .. }) => {
+                    StatusKind::Server {
+                        peers: Arc::clone(peers),
+                        listen_port: *listen_port,
+                        interface_address: interface_address.clone(),
+                        state_val: s.connection_state,
+                        started_at: s.started_at.clone(),
+                        bytes_sent: s.traffic_stats.get_sent(),
+                        bytes_received: s.traffic_stats.get_received(),
+                        error_message: s.error_message.clone(),
+                    }
+                }
+                None => {
+                    StatusKind::Disconnected(StatusResponse {
+                        state: s.connection_state,
+                        vpn_ip: None,
+                        server_endpoint: None,
+                        connected_at: None,
+                        bytes_sent: 0,
+                        bytes_received: 0,
+                        last_handshake: None,
+                        error_message: s.error_message.clone(),
+                    })
+                }
+            }
+        }; // state lock dropped here
+
+        match kind {
+            StatusKind::Client(status) | StatusKind::Disconnected(status) => {
                 JsonRpcResponse::success(request.id, serde_json::to_value(status).unwrap())
             }
-            Some(VpnMode::Server { listen_port, interface_address, peers, .. }) => {
-                // Get peer counts
-                let peers_guard = peers.blocking_lock();
+            StatusKind::Server {
+                peers, listen_port, interface_address, state_val,
+                started_at, bytes_sent, bytes_received, error_message,
+            } => {
+                let peers_guard = peers.lock().await;
                 let peer_count = peers_guard.len();
                 let connected_peer_count = peers_guard.connected_count();
                 drop(peers_guard);
 
                 let status = ServerStatusResponse {
-                    state: s.connection_state,
-                    listen_port: Some(*listen_port),
-                    interface_address: Some(interface_address.clone()),
+                    state: state_val,
+                    listen_port: Some(listen_port),
+                    interface_address: Some(interface_address),
                     peer_count,
                     connected_peer_count,
-                    started_at: s.started_at.clone(),
-                    bytes_sent: s.traffic_stats.get_sent(),
-                    bytes_received: s.traffic_stats.get_received(),
-                    error_message: s.error_message.clone(),
-                };
-                JsonRpcResponse::success(request.id, serde_json::to_value(status).unwrap())
-            }
-            None => {
-                let status = StatusResponse {
-                    state: s.connection_state,
-                    vpn_ip: None,
-                    server_endpoint: None,
-                    connected_at: None,
-                    bytes_sent: 0,
-                    bytes_received: 0,
-                    last_handshake: None,
-                    error_message: s.error_message.clone(),
+                    started_at,
+                    bytes_sent,
+                    bytes_received,
+                    error_message,
                 };
                 JsonRpcResponse::success(request.id, serde_json::to_value(status).unwrap())
             }
@@ -451,54 +487,74 @@ impl DaemonService {
         state: &Arc<Mutex<DaemonState>>,
         status_tx: &broadcast::Sender<String>,
     ) -> Result<(), ()> {
-        let s = state.lock().await;
+        // Extract values under state lock, then drop before awaiting peers lock
+        enum NotifKind {
+            Client(StatusChangedParams),
+            Server {
+                peers: Arc<Mutex<PeerManager>>,
+                state_val: ConnectionState,
+                bytes_sent: u64,
+                bytes_received: u64,
+            },
+            Disconnected(StatusChangedParams),
+        }
 
-        // Build notification based on mode
-        let notification = match &s.mode {
-            Some(VpnMode::Client { vpn_ip, server_endpoint, .. }) => {
-                let params = StatusChangedParams {
-                    state: s.connection_state,
-                    vpn_ip: Some(vpn_ip.clone()),
-                    server_endpoint: Some(server_endpoint.clone()),
-                    connected_at: s.started_at.clone(),
-                    bytes_sent: s.traffic_stats.get_sent(),
-                    bytes_received: s.traffic_stats.get_received(),
-                };
+        let kind = {
+            let s = state.lock().await;
+            match &s.mode {
+                Some(VpnMode::Client { vpn_ip, server_endpoint, .. }) => {
+                    NotifKind::Client(StatusChangedParams {
+                        state: s.connection_state,
+                        vpn_ip: Some(vpn_ip.clone()),
+                        server_endpoint: Some(server_endpoint.clone()),
+                        connected_at: s.started_at.clone(),
+                        bytes_sent: s.traffic_stats.get_sent(),
+                        bytes_received: s.traffic_stats.get_received(),
+                    })
+                }
+                Some(VpnMode::Server { peers, .. }) => {
+                    NotifKind::Server {
+                        peers: Arc::clone(peers),
+                        state_val: s.connection_state,
+                        bytes_sent: s.traffic_stats.get_sent(),
+                        bytes_received: s.traffic_stats.get_received(),
+                    }
+                }
+                None => {
+                    NotifKind::Disconnected(StatusChangedParams {
+                        state: s.connection_state,
+                        vpn_ip: None,
+                        server_endpoint: None,
+                        connected_at: None,
+                        bytes_sent: 0,
+                        bytes_received: 0,
+                    })
+                }
+            }
+        }; // state lock dropped here
+
+        let notification = match kind {
+            NotifKind::Client(params) | NotifKind::Disconnected(params) => {
                 JsonRpcNotification::new(
                     "status_changed",
                     serde_json::to_value(params).unwrap_or_default(),
                 )
             }
-            Some(VpnMode::Server { peers, .. }) => {
-                // For server mode, we send a different notification
-                let peers_guard = peers.blocking_lock();
+            NotifKind::Server { peers, state_val, bytes_sent, bytes_received } => {
+                let peers_guard = peers.lock().await;
                 let peer_count = peers_guard.len();
                 let connected_peer_count = peers_guard.connected_count();
                 drop(peers_guard);
 
                 let params = ServerStatusChangedParams {
-                    state: s.connection_state,
+                    state: state_val,
                     peer_count,
                     connected_peer_count,
-                    bytes_sent: s.traffic_stats.get_sent(),
-                    bytes_received: s.traffic_stats.get_received(),
+                    bytes_sent,
+                    bytes_received,
                 };
                 JsonRpcNotification::new(
                     "server_status_changed",
-                    serde_json::to_value(params).unwrap_or_default(),
-                )
-            }
-            None => {
-                let params = StatusChangedParams {
-                    state: s.connection_state,
-                    vpn_ip: None,
-                    server_endpoint: None,
-                    connected_at: None,
-                    bytes_sent: 0,
-                    bytes_received: 0,
-                };
-                JsonRpcNotification::new(
-                    "status_changed",
                     serde_json::to_value(params).unwrap_or_default(),
                 )
             }
