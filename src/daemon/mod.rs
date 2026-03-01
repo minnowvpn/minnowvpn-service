@@ -57,6 +57,8 @@ pub enum VpnMode {
 pub struct DaemonService {
     state: Arc<Mutex<DaemonState>>,
     status_tx: broadcast::Sender<String>,
+    /// Shutdown signal for the auto-connect loop (signaled during cleanup)
+    ac_shutdown_tx: Mutex<Option<watch::Sender<bool>>>,
 }
 
 pub struct DaemonState {
@@ -95,6 +97,7 @@ impl DaemonService {
         Self {
             state: Arc::new(Mutex::new(DaemonState::default())),
             status_tx,
+            ac_shutdown_tx: Mutex::new(None),
         }
     }
 
@@ -168,6 +171,15 @@ impl DaemonService {
                     let _ = Self::send_status_notification(&bandwidth_state, &bandwidth_status_tx).await;
                 }
             }
+        });
+
+        // Spawn auto-connect task - reconnects using persisted state if desired_state is Connected
+        let ac_state = Arc::clone(&self.state);
+        let ac_status_tx = self.status_tx.clone();
+        let (ac_shutdown_tx, ac_shutdown_rx) = tokio::sync::watch::channel(false);
+        *self.ac_shutdown_tx.lock().await = Some(ac_shutdown_tx);
+        tokio::spawn(async move {
+            routes::auto_connect_loop(ac_state, ac_status_tx, Some(ac_shutdown_rx)).await;
         });
 
         // Run the server
@@ -566,7 +578,11 @@ impl DaemonService {
         Ok(())
     }
 
-    /// Spawn a VPN client background task
+    /// Spawn a VPN client background task (legacy JSON-RPC path)
+    ///
+    /// DEPRECATED: This is the legacy JSON-RPC code path. The REST API path in
+    /// `routes::spawn_client_task_with_reconnect()` supersedes this and includes
+    /// auto-reconnect on connection drop. This function does NOT auto-reconnect.
     ///
     /// This helper spawns a task that runs the client event loop and handles:
     /// - Shutdown signal monitoring
@@ -1568,6 +1584,11 @@ impl DaemonService {
 
     /// Cleanup on shutdown
     pub async fn cleanup(&self) -> Result<(), MinnowVpnError> {
+        // Signal auto-connect loop to stop (prevents mid-connect TUN device orphaning)
+        if let Some(ref ac_tx) = *self.ac_shutdown_tx.lock().await {
+            let _ = ac_tx.send(true);
+        }
+
         let s = self.state.lock().await;
 
         // Send shutdown signal if VPN is running

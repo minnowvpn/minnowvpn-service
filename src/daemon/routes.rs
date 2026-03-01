@@ -14,8 +14,9 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use tokio::sync::{broadcast, Mutex};
+use tokio::sync::{broadcast, watch, Mutex};
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt;
 
@@ -267,7 +268,7 @@ pub async fn handle_connect(
             }
 
             // Spawn client task
-            spawn_client_task(client, shutdown_rx, state.daemon_state.clone(), state.status_tx.clone());
+            spawn_client_task_with_reconnect(client, shutdown_rx, state.daemon_state.clone(), state.status_tx.clone());
 
             Ok(Json(ConnectResponse { connected: true }))
         }
@@ -527,7 +528,7 @@ pub async fn handle_update_config(
             }
 
             // Start the client run loop in background
-            spawn_client_task(client, shutdown_rx, state.daemon_state.clone(), state.status_tx.clone());
+            spawn_client_task_with_reconnect(client, shutdown_rx, state.daemon_state.clone(), state.status_tx.clone());
 
             Ok(Json(UpdateConfigResponse {
                 updated: true,
@@ -594,7 +595,7 @@ pub async fn handle_update_config(
                         let _ = state.status_tx.send(serde_json::to_string(&notification).unwrap());
 
                         // Spawn background task for rollback session
-                        spawn_client_task(rollback_client, rollback_shutdown_rx, state.daemon_state.clone(), state.status_tx.clone());
+                        spawn_client_task_with_reconnect(rollback_client, rollback_shutdown_rx, state.daemon_state.clone(), state.status_tx.clone());
 
                         return Err(ApiError {
                             code: UPDATE_FAILED,
@@ -1184,10 +1185,274 @@ async fn send_status_notification(state: &AppState) {
     let _ = state.status_tx.send(serde_json::to_string(&notification).unwrap());
 }
 
-/// Spawn client VPN task
-fn spawn_client_task(
+/// Guard to prevent multiple auto-connect loops running simultaneously
+static AUTO_CONNECT_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+/// Auto-connect loop with infinite retry and exponential backoff.
+///
+/// Called on daemon startup (if persisted desired_state is Connected) and
+/// on connection drop (if desired_state is still Connected).
+///
+/// The loop exits when:
+/// - desired_state changes to Disconnected (user called /disconnect)
+/// - Connection succeeds (spawn_client_task takes over)
+/// - Config is invalid (won't get better by retrying)
+/// - Shutdown signal received (daemon exiting)
+/// - Another connect call took over (state is already Connected/Connecting)
+pub(crate) async fn auto_connect_loop(
+    state: Arc<Mutex<DaemonState>>,
+    status_tx: broadcast::Sender<String>,
+    mut shutdown_rx: Option<watch::Receiver<bool>>,
+) {
+    // Prevent duplicate loops
+    if AUTO_CONNECT_ACTIVE.swap(true, Ordering::SeqCst) {
+        tracing::debug!("Auto-connect loop already active, skipping");
+        return;
+    }
+
+    // Ensure we clear the flag when we exit
+    struct Guard;
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            AUTO_CONNECT_ACTIVE.store(false, Ordering::SeqCst);
+        }
+    }
+    let _guard = Guard;
+
+    // Initial delay to let HTTP server start and Flutter SSE connect
+    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+
+    // Load persisted state
+    let saved = match persistence::load_connection_state() {
+        Some(s) => s,
+        None => {
+            tracing::debug!("Auto-connect: no persisted state, nothing to do");
+            return;
+        }
+    };
+
+    if saved.desired_state != DesiredState::Connected {
+        tracing::debug!("Auto-connect: desired_state is disconnected, nothing to do");
+        return;
+    }
+
+    let config_str = match saved.config {
+        Some(ref c) if !c.is_empty() => c.clone(),
+        _ => {
+            tracing::debug!("Auto-connect: no config in persisted state");
+            return;
+        }
+    };
+
+    tracing::info!("Auto-connect: desired_state is Connected, starting retry loop");
+
+    let backoff_secs: &[u64] = &[2, 5, 10, 30, 60];
+    let mut attempt: u32 = 0;
+
+    loop {
+        // Check shutdown signal
+        if let Some(ref mut rx) = shutdown_rx {
+            if *rx.borrow() {
+                tracing::info!("Auto-connect: shutdown signal received, stopping");
+                return;
+            }
+        }
+
+        // Re-read persistence to get latest desired_state and config
+        let current = persistence::load_connection_state();
+        if let Some(ref cs) = current {
+            if cs.desired_state != DesiredState::Connected {
+                tracing::info!("Auto-connect: desired_state changed to disconnected, stopping");
+                return;
+            }
+        }
+
+        // Use latest config from persistence if available
+        let current_config_str = current
+            .as_ref()
+            .and_then(|cs| cs.config.as_ref())
+            .cloned()
+            .unwrap_or_else(|| config_str.clone());
+
+        // Atomically check-and-set ConnectionState::Connecting under mutex
+        // Bail if another connect call took over
+        {
+            let mut s = state.lock().await;
+            match s.connection_state {
+                ConnectionState::Connected | ConnectionState::Connecting => {
+                    tracing::info!("Auto-connect: state is {:?}, another connect took over", s.connection_state);
+                    return;
+                }
+                _ => {
+                    s.connection_state = ConnectionState::Connecting;
+                    s.error_message = None;
+                }
+            }
+        }
+
+        // Send connecting status notification
+        send_status_notification_raw(&state, &status_tx).await;
+
+        attempt += 1;
+        tracing::info!("Auto-connect attempt #{}", attempt);
+
+        // Parse config
+        let config = match WireGuardConfig::from_string(&current_config_str) {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::error!("Auto-connect: invalid config: {} (won't retry)", e);
+                let mut s = state.lock().await;
+                s.connection_state = ConnectionState::Error;
+                s.error_message = Some(format!("Invalid saved config: {}", e));
+                return;
+            }
+        };
+
+        // Extract connection info
+        let server_endpoint = config
+            .peers
+            .first()
+            .and_then(|p| p.endpoint.as_ref())
+            .map(|e| e.to_string())
+            .unwrap_or_default();
+        let vpn_ip = config
+            .interface
+            .address
+            .first()
+            .map(|a| a.to_string())
+            .unwrap_or_default();
+
+        let traffic_stats = {
+            let s = state.lock().await;
+            Arc::clone(&s.traffic_stats)
+        };
+
+        let config_for_storage = config.clone();
+
+        // Attempt to create WireGuard client
+        match WireGuardClient::new(config, Some(traffic_stats)).await {
+            Ok(client) => {
+                let (shutdown_tx, shutdown_rx) = watch::channel(false);
+
+                {
+                    let mut s = state.lock().await;
+                    s.connection_state = ConnectionState::Connected;
+                    s.mode = Some(VpnMode::Client {
+                        vpn_ip: vpn_ip.clone(),
+                        server_endpoint: server_endpoint.clone(),
+                        current_config: config_for_storage,
+                        previous_config: None,
+                    });
+                    s.started_at = Some(chrono_now());
+                    s.traffic_stats.reset();
+                    s.shutdown_tx = Some(shutdown_tx);
+                }
+
+                send_status_notification_raw(&state, &status_tx).await;
+
+                // Update persistence
+                let _ = persistence::update_last_connected();
+                let _ = persistence::update_retry_count(0);
+
+                tracing::info!("Auto-connect: successfully connected!");
+
+                // Spawn client task with reconnect-on-drop
+                spawn_client_task_with_reconnect(client, shutdown_rx, state, status_tx);
+                return;
+            }
+            Err(e) => {
+                let delay_idx = (attempt as usize).saturating_sub(1).min(backoff_secs.len() - 1);
+                let delay = backoff_secs[delay_idx];
+
+                tracing::warn!(
+                    "Auto-connect attempt #{} failed: {}. Retrying in {}s...",
+                    attempt, e, delay
+                );
+
+                // Update state to error
+                {
+                    let mut s = state.lock().await;
+                    s.connection_state = ConnectionState::Error;
+                    s.error_message = Some(format!("Auto-connect failed: {}", e));
+                }
+
+                // Update persistence retry count
+                let _ = persistence::update_retry_count(attempt);
+
+                // Emit auto_connect_retry SSE event
+                let notification = serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "method": "auto_connect_retry",
+                    "params": {
+                        "attempt": attempt,
+                        "status": "retrying",
+                        "next_retry_secs": delay,
+                        "error": format!("{}", e),
+                    }
+                });
+                let _ = status_tx.send(serde_json::to_string(&notification).unwrap_or_default());
+
+                // Sleep with shutdown signal check
+                let sleep_duration = tokio::time::Duration::from_secs(delay);
+                if let Some(ref mut rx) = shutdown_rx {
+                    tokio::select! {
+                        _ = tokio::time::sleep(sleep_duration) => {}
+                        _ = rx.changed() => {
+                            if *rx.borrow() {
+                                tracing::info!("Auto-connect: shutdown signal during sleep, stopping");
+                                return;
+                            }
+                        }
+                    }
+                } else {
+                    tokio::time::sleep(sleep_duration).await;
+                }
+            }
+        }
+    }
+}
+
+/// Send a status notification directly via state + status_tx (without AppState wrapper)
+async fn send_status_notification_raw(
+    state: &Arc<Mutex<DaemonState>>,
+    status_tx: &broadcast::Sender<String>,
+) {
+    let s = state.lock().await;
+    let notification = match &s.mode {
+        Some(VpnMode::Client { vpn_ip, server_endpoint, .. }) => {
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "status_changed",
+                "params": {
+                    "state": s.connection_state,
+                    "vpn_ip": vpn_ip,
+                    "server_endpoint": server_endpoint,
+                    "connected_at": s.started_at,
+                    "bytes_sent": s.traffic_stats.get_sent(),
+                    "bytes_received": s.traffic_stats.get_received(),
+                    "error_message": s.error_message,
+                }
+            })
+        }
+        _ => {
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "status_changed",
+                "params": {
+                    "state": s.connection_state,
+                    "error_message": s.error_message,
+                }
+            })
+        }
+    };
+    drop(s);
+    let _ = status_tx.send(serde_json::to_string(&notification).unwrap_or_default());
+}
+
+/// Spawn client VPN task with auto-reconnect on connection drop
+fn spawn_client_task_with_reconnect(
     client: WireGuardClient,
-    shutdown_rx: tokio::sync::watch::Receiver<bool>,
+    shutdown_rx: watch::Receiver<bool>,
     state: Arc<Mutex<DaemonState>>,
     status_tx: broadcast::Sender<String>,
 ) {
@@ -1209,6 +1474,9 @@ fn spawn_client_task(
                 Ok(())
             }
         };
+
+        // Determine if we should auto-reconnect before cleanup
+        let should_reconnect = result.is_err();
 
         // Update state on completion
         {
@@ -1241,9 +1509,20 @@ fn spawn_client_task(
         });
         let _ = status_tx.send(serde_json::to_string(&notification).unwrap());
 
-        // Cleanup
+        // Cleanup BEFORE attempting reconnect (prevents TUN device conflicts)
         if let Err(e) = client.cleanup().await {
             tracing::error!("Client cleanup error: {}", e);
+        }
+
+        // Auto-reconnect on error if desired_state is still Connected
+        if should_reconnect {
+            if let Some(saved) = persistence::load_connection_state() {
+                if saved.desired_state == DesiredState::Connected {
+                    tracing::info!("Connection lost but desired_state is Connected, starting auto-reconnect...");
+                    // auto_connect_loop handles the AtomicBool guard and retry logic
+                    auto_connect_loop(state, status_tx, None).await;
+                }
+            }
         }
     });
 }

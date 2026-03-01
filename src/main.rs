@@ -122,8 +122,27 @@ async fn run_daemon(args: Args) -> Result<(), MinnowVpnError> {
     // Default port: 51820 for client mode
     let port = args.http_port.unwrap_or(51820);
 
-    // Run with cleanup on Ctrl+C
+    // Run with cleanup on Ctrl+C or SIGTERM
     let ctrl_c = tokio::signal::ctrl_c();
+
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("Failed to install SIGTERM handler")
+            .recv()
+            .await
+    };
+
+    #[cfg(windows)]
+    let terminate = async {
+        tokio::signal::windows::ctrl_break()
+            .expect("Failed to install Ctrl+Break handler")
+            .recv()
+            .await
+    };
+
+    #[cfg(not(any(unix, windows)))]
+    let terminate = std::future::pending::<Option<()>>();
 
     tokio::select! {
         result = daemon.run_http(port, args.token_path) => {
@@ -131,6 +150,14 @@ async fn run_daemon(args: Args) -> Result<(), MinnowVpnError> {
         }
         _ = ctrl_c => {
             tracing::info!("\nReceived Ctrl+C, shutting down daemon...");
+            daemon.cleanup().await?;
+            Ok(())
+        }
+        _ = terminate => {
+            #[cfg(unix)]
+            tracing::info!("\nReceived SIGTERM, shutting down daemon...");
+            #[cfg(windows)]
+            tracing::info!("\nReceived Ctrl+Break, shutting down daemon...");
             daemon.cleanup().await?;
             Ok(())
         }
