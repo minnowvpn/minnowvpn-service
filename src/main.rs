@@ -49,6 +49,11 @@ struct Args {
     #[arg(long, requires = "daemon")]
     http_port: Option<u16>,
 
+    /// HTTP bind address for daemon REST API (default: 127.0.0.1)
+    /// Set to 0.0.0.0 in Docker to allow container-to-host communication
+    #[arg(long, requires = "daemon")]
+    http_host: Option<String>,
+
     /// Path to write the auth token file (default: /var/run/minnowvpn/auth-token)
     #[arg(long, requires = "daemon")]
     token_path: Option<PathBuf>,
@@ -145,7 +150,7 @@ async fn run_daemon(args: Args) -> Result<(), MinnowVpnError> {
     let terminate = std::future::pending::<Option<()>>();
 
     tokio::select! {
-        result = daemon.run_http(port, args.token_path) => {
+        result = daemon.run_http(port, args.http_host.as_deref(), args.token_path) => {
             result
         }
         _ = ctrl_c => {

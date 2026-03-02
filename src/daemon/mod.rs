@@ -105,7 +105,7 @@ impl DaemonService {
     ///
     /// This is the preferred method for running the daemon, providing a REST API
     /// with Bearer token authentication instead of Unix sockets.
-    pub async fn run_http(&self, port: u16, token_path: Option<std::path::PathBuf>) -> Result<(), MinnowVpnError> {
+    pub async fn run_http(&self, port: u16, host: Option<&str>, token_path: Option<std::path::PathBuf>) -> Result<(), MinnowVpnError> {
         use axum::middleware;
         use std::net::SocketAddr;
 
@@ -142,8 +142,12 @@ impl DaemonService {
         // Build public router (no auth) and merge with protected routes
         let app = routes::build_public_router().merge(protected_routes);
 
-        // Bind to localhost only
-        let addr = SocketAddr::from(([127, 0, 0, 1], port));
+        // Bind address (default: localhost only; use 0.0.0.0 for Docker)
+        let bind_host: std::net::IpAddr = host
+            .unwrap_or("127.0.0.1")
+            .parse()
+            .unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
+        let addr = SocketAddr::from((bind_host, port));
         let listener = tokio::net::TcpListener::bind(addr).await.map_err(|e| {
             MinnowVpnError::Config(ConfigError::ParseError {
                 line: 0,
