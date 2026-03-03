@@ -662,6 +662,12 @@ impl RouteManager {
 async fn add_route_platform(device: &str, network: &Ipv4Net) -> Result<(), MinnowVpnError> {
     #[cfg(target_os = "macos")]
     {
+        // Delete any stale route first (from previous VPN sessions that didn't clean up)
+        let _ = Command::new("route")
+            .args(["-n", "delete", "-net", &network.to_string()])
+            .output()
+            .await;
+
         let status = Command::new("route")
             .args(["-n", "add", "-net", &network.to_string(), "-interface", device])
             .status()
@@ -850,6 +856,12 @@ async fn add_endpoint_bypass_platform(endpoint: Ipv4Addr) -> Result<(), MinnowVp
                 network: endpoint_str.clone(),
                 reason: "Could not parse default gateway".to_string(),
             })?;
+
+        // Delete stale endpoint route first (from previous sessions)
+        let _ = Command::new("route")
+            .args(["-n", "delete", "-host", &endpoint_str])
+            .output()
+            .await;
 
         // Add specific route for endpoint through default gateway
         let status = Command::new("route")
