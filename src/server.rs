@@ -308,7 +308,7 @@ impl WireGuardServer {
                         match result {
                             Ok(len) => {
                                 if let Err(e) = self.handle_tun_packet(&tun_buf[..len]).await {
-                                    tracing::trace!("Error handling TUN packet: {}", e);
+                                    tracing::warn!("Error handling TUN packet: {}", e);
                                 }
                             }
                             Err(e) => {
@@ -322,7 +322,7 @@ impl WireGuardServer {
                         match result {
                             Ok((len, from)) => {
                                 if let Err(e) = self.handle_udp_packet(&udp_buf[..len], from).await {
-                                    tracing::trace!("Error handling UDP packet: {}", e);
+                                    tracing::warn!("Error handling UDP packet: {}", e);
                                 }
                             }
                             Err(e) => {
@@ -366,7 +366,7 @@ impl WireGuardServer {
                         match result {
                             Ok(len) => {
                                 if let Err(e) = self.handle_tun_packet(&tun_buf[..len]).await {
-                                    tracing::trace!("Error handling TUN packet: {}", e);
+                                    tracing::warn!("Error handling TUN packet: {}", e);
                                 }
                             }
                             Err(e) => {
@@ -380,7 +380,7 @@ impl WireGuardServer {
                         match result {
                             Ok((len, from)) => {
                                 if let Err(e) = self.handle_udp_packet(&udp_buf[..len], from).await {
-                                    tracing::trace!("Error handling UDP packet: {}", e);
+                                    tracing::warn!("Error handling UDP packet: {}", e);
                                 }
                             }
                             Err(e) => {
@@ -412,6 +412,7 @@ impl WireGuardServer {
         }
 
         let msg_type = get_message_type(packet)?;
+        tracing::debug!("UDP packet: {} bytes from {}, type={:?}", packet.len(), from, msg_type);
 
         match msg_type {
             MessageType::HandshakeInitiation => {
@@ -549,6 +550,7 @@ impl WireGuardServer {
         from: SocketAddr,
     ) -> Result<(), MinnowVpnError> {
         let header = TransportHeader::from_bytes(packet)?;
+        tracing::debug!("Transport packet: {} bytes from {}, receiver_index={}", packet.len(), from, header.receiver_index);
 
         if let Some(ref shared) = self.shared_peers {
             // Daemon mode: use shared peer manager
@@ -631,7 +633,7 @@ impl WireGuardServer {
             let mut peers = shared.lock().await;
 
             let peer = peers.find_by_allowed_ip_mut(dest_ip).ok_or_else(|| {
-                tracing::trace!("No route to {}", dest_ip);
+                tracing::warn!("No route to {}", dest_ip);
                 NetworkError::NoEndpoint
             })?;
 
@@ -662,7 +664,7 @@ impl WireGuardServer {
         } else {
             // Standalone mode: use local peer manager
             let peer = self.peers.find_by_allowed_ip_mut(dest_ip).ok_or_else(|| {
-                tracing::trace!("No route to {}", dest_ip);
+                tracing::warn!("No route to {}", dest_ip);
                 NetworkError::NoEndpoint
             })?;
 

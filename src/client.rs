@@ -345,6 +345,7 @@ impl WireGuardClient {
                 result = self.tun.read(&mut tun_buf) => {
                     match result {
                         Ok(len) => {
+                            tracing::debug!("TUN read: {} bytes (client)", len);
                             if let Err(e) = self.handle_tun_packet(&tun_buf[..len]).await {
                                 tracing::warn!("Error handling TUN packet: {}", e);
                             }
