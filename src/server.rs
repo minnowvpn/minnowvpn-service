@@ -626,7 +626,10 @@ impl WireGuardServer {
     /// Handle outgoing packet from TUN (needs routing to correct peer)
     async fn handle_tun_packet(&mut self, packet: &[u8]) -> Result<(), MinnowVpnError> {
         // Parse destination IP from packet
-        let dest_ip = parse_ipv4_dest(packet)?;
+        let dest_ip = match parse_ipv4_dest(packet)? {
+            Some(ip) => ip,
+            None => return Ok(()), // Skip non-IPv4 packets (e.g., IPv6)
+        };
 
         if let Some(ref shared) = self.shared_peers {
             // Daemon mode: use shared peer manager
@@ -794,7 +797,7 @@ impl WireGuardServer {
 }
 
 /// Parse destination IPv4 address from an IP packet
-fn parse_ipv4_dest(packet: &[u8]) -> Result<Ipv4Addr, MinnowVpnError> {
+fn parse_ipv4_dest(packet: &[u8]) -> Result<Option<Ipv4Addr>, MinnowVpnError> {
     if packet.len() < 20 {
         return Err(ProtocolError::InvalidMessageLength {
             expected: 20,
@@ -803,14 +806,14 @@ fn parse_ipv4_dest(packet: &[u8]) -> Result<Ipv4Addr, MinnowVpnError> {
         .into());
     }
 
-    // Check IP version
+    // Check IP version — skip IPv6 packets (version 6) gracefully
     let version = packet[0] >> 4;
     if version != 4 {
-        return Err(ProtocolError::InvalidMessageType { msg_type: version }.into());
+        return Ok(None); // Not IPv4, skip (e.g., IPv6 from ::/0 AllowedIPs)
     }
 
     // IPv4 destination is bytes 16-19
-    Ok(Ipv4Addr::new(packet[16], packet[17], packet[18], packet[19]))
+    Ok(Some(Ipv4Addr::new(packet[16], packet[17], packet[18], packet[19])))
 }
 
 #[cfg(test)]
@@ -828,7 +831,7 @@ mod tests {
         packet[19] = 100;
 
         let dest = parse_ipv4_dest(&packet).unwrap();
-        assert_eq!(dest, Ipv4Addr::new(192, 168, 1, 100));
+        assert_eq!(dest, Some(Ipv4Addr::new(192, 168, 1, 100)));
     }
 
     #[test]
